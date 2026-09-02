@@ -27,6 +27,12 @@ VIEW = Vector((-0.62, 0.92, -0.78)).normalized()
 # --- scene ------------------------------------------------------------------
 
 def scene(samples=96):
+    # read_factory_settings wipes every datablock, so any cached reference from a
+    # previous render in this process is now dangling. Drop it, or the next label()
+    # raises "StructRNA of type Material has been removed" and the second image of a
+    # two-image run never happens.
+    global _LABEL_MAT
+    _LABEL_MAT = None
     bpy.ops.wm.read_factory_settings(use_empty=True)
     sc = bpy.context.scene
     sc.render.engine = "CYCLES"

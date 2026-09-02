@@ -20,6 +20,7 @@ from prefabgen.blender import showcase as S  # noqa: E402
 from prefabgen.spec import spec_from_dict  # noqa: E402
 
 HALF_PI = math.pi / 2
+LAP = 0.004      # 4mm: enough to break coplanarity, invisible at any sane zoom
 
 
 # --- finding pieces by what they are, not by name ---------------------------
@@ -104,11 +105,19 @@ def gallery(specs, path, width, height, samples, columns=None):
     up.normalize()
 
     col_step = footprint * 1.3
-    # Rows need extra clearance: tall pieces lean up the screen and hide the row behind.
-    row_step = footprint * 1.1 + tall * 0.85
+    # Rows need clearance for how far a piece LEANS up the screen. A vertical metre
+    # projects cos(elevation) up; a ground metre between rows projects sin(elevation)
+    # down. So a piece of height h eats h*cot(elevation) of row spacing - at this 35
+    # degree view that is 1.4x its height, not the fraction it looks like.
+    lean = math.sqrt(max(1e-6, 1.0 - S.VIEW.z ** 2)) / max(1e-6, abs(S.VIEW.z))
+    row_step = footprint * 1.15 + tall * lean * 1.05
 
+    # Rows recede across the ground, so their on-screen height is foreshortened by the
+    # view's vertical component; ignoring that picks too many columns and leaves the
+    # bottom of the frame empty.
+    squash = abs(S.VIEW.z) or 1.0
     cols = columns or max(1, round(math.sqrt(len(built) * (width / height) *
-                                             (row_step / col_step))))
+                                             (row_step * squash / col_step))))
     rows = math.ceil(len(built) / cols)
 
     for i, (spec, obj) in enumerate(built):
@@ -116,7 +125,8 @@ def gallery(specs, path, width, height, samples, columns=None):
         offset = (right * ((col - (cols - 1) / 2) * col_step)
                   + up * (((rows - 1) / 2 - row) * row_step))
         S.sit_at(obj, offset.x, offset.y)
-        anchor = offset - up * (row_step * 0.42)
+        # Keep the label pinned near its own piece rather than scaling with row_step.
+        anchor = offset - up * (footprint * 0.62)
         S.label(S.short_label(spec), (anchor.x, anchor.y, footprint * 0.34),
                 footprint * 0.105, label_rot)
 
@@ -145,8 +155,16 @@ def _walls(specs, cx, cy, w, d, z, height, material, openings):
             raise LookupError(f"no {length}x{height} {material} wall")
         # Inset by half a wall so the building's OUTER faces land on the grid line the
         # roof is sized to; centring the walls on it leaves them proud of the eaves.
-        ox = sx * (w / 2 - spec.thickness / 2)
-        oy = sy * (d / 2 - spec.thickness / 2)
+        #
+        # Then lap the side walls a hair further in. All four walls are the same length,
+        # so a side wall's END face lands exactly coplanar with the outer face of the
+        # wall it meets, and the two z-fight into black bars down every corner. The kit
+        # has no corner post to hide that join, so the showcase laps them instead.
+        # Two coplanar pairs form at every corner, not one: a side wall's end face
+        # meets the front wall's outer face, AND the front wall's end face meets the
+        # side wall's outer face. Lap the sides in and the fronts out to separate both.
+        ox = sx * (w / 2 - spec.thickness / 2 - LAP)
+        oy = sy * (d / 2 - spec.thickness / 2 + LAP)
         out.append(S.place(S.make(spec), cx + ox, cy + oy, z, rot))
     return out
 
