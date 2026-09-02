@@ -18,7 +18,9 @@ from . import config as config_mod
 from . import manifest as manifest_mod
 from .spec import MAP_ROLES
 
-RUNNER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blender", "run.py")
+_BLENDER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blender")
+RUNNER = os.path.join(_BLENDER_DIR, "run.py")
+SHOWCASE_RUNNER = os.path.join(_BLENDER_DIR, "showcase_run.py")
 
 BLENDER_CANDIDATES = [
     "/Applications/Blender.app/Contents/MacOS/Blender",
@@ -172,6 +174,44 @@ def cmd_build(args) -> int:
     return 0
 
 
+def cmd_showcase(args) -> int:
+    """Render a gallery of every piece and a few assembled sample buildings."""
+    specs, out_dir = [], None
+    for path in args.configs:
+        cfg = config_mod.load(path)
+        plan = config_mod.resolve(cfg, base_dir=os.path.dirname(os.path.abspath(path)) or ".")
+        specs.extend(plan.specs)
+        out_dir = out_dir or os.path.abspath(plan.out_dir)
+    if not specs:
+        print("no prefabs to show", file=sys.stderr)
+        return 1
+
+    target = os.path.abspath(args.out) if args.out else out_dir
+    job = {
+        "specs": [s.to_dict() for s in specs],
+        "gallery": None if args.only == "buildings" else os.path.join(target, "gallery.png"),
+        "buildings": None if args.only == "gallery" else os.path.join(target, "buildings.png"),
+        "width": args.width, "height": args.height, "samples": args.samples,
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(job, fh)
+        job_path = fh.name
+    try:
+        cmd = [find_blender(args.blender), "--background", "--factory-startup",
+               "--python", SHOWCASE_RUNNER, "--", "--job", job_path]
+        proc = subprocess.run(cmd, capture_output=not args.verbose, text=True)
+        if proc.returncode != 0 or (not args.verbose and "[prefabgen]" not in (proc.stdout or "")):
+            print(proc.stdout or "", file=sys.stderr)
+            print(proc.stderr or "", file=sys.stderr)
+            return proc.returncode or 1
+        for line in (proc.stdout or "").splitlines():
+            if line.startswith("[prefabgen]") or line.startswith(("GALLERY", "BUILDINGS")):
+                print(line)
+    finally:
+        os.unlink(job_path)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="prefabgen")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -183,5 +223,16 @@ def main(argv=None) -> int:
         p.add_argument("--no-thumbnails", action="store_true", help="skip preview renders")
         p.add_argument("--verbose", action="store_true", help="stream Blender's full output")
         p.set_defaults(func=fn)
+    show = sub.add_parser("showcase")
+    show.add_argument("configs", nargs="+", help="one or more config files to pool")
+    show.add_argument("--out", help="directory for gallery.png / buildings.png")
+    show.add_argument("--only", choices=["gallery", "buildings"], help="render just one")
+    show.add_argument("--width", type=int, default=3200)
+    show.add_argument("--height", type=int, default=1800)
+    show.add_argument("--samples", type=int, default=96)
+    show.add_argument("--blender", help="path to the Blender executable")
+    show.add_argument("--verbose", action="store_true")
+    show.set_defaults(func=cmd_showcase)
+
     args = parser.parse_args(argv)
     return args.func(args)

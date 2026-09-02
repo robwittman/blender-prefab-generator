@@ -25,6 +25,16 @@ materials:
       normal: roof_07_nor_gl_4k.jpg
       roughness: roof_07_rough_4k.jpg
       height: roof_07_disp_4k.jpg
+  reed:
+    display_name: Reed
+    dir: reed
+    maps:
+      albedo: reed_roof_04_diff_4k.jpg
+      ao: reed_roof_04_ao_4k.jpg
+      normal: reed_roof_04_nor_gl_4k.jpg
+      roughness: reed_roof_04_rough_4k.jpg
+      height: reed_roof_04_disp_4k.jpg
+
 
 # Pitch is named, not typed inline, so every piece that has to meet another piece is
 # guaranteed to use the identical angle. 26.565 deg is atan(1/2): a 1m run rises
@@ -56,7 +66,7 @@ parts:
       span:     [1, 2, 4]
       run:      [1, 2]
       pitch:    [shallow, steep]
-      material: [shingle_ceramic]
+      material: [shingle_ceramic, reed]
 
   # Ridge cap. Its cross-section angle is derived from the pitch, so a shallow ridge
   # opens to 126.87 deg and a steep one to 90 deg.
@@ -70,7 +80,7 @@ parts:
     matrix:
       span:     [1, 2, 4]
       pitch:    [shallow, steep]
-      material: [shingle_ceramic]
+      material: [shingle_ceramic, reed]
 
   # Outside corner: two roof planes mitred along the diagonal, surface z = min(x,y)*tan.
   - type: roof
@@ -83,7 +93,7 @@ parts:
     matrix:
       run:      [1, 2]
       pitch:    [shallow, steep]
-      material: [shingle_ceramic]
+      material: [shingle_ceramic, reed]
 
   # Inside corner: surface z = max(x,y)*tan, diagonal is the low line.
   - type: roof
@@ -96,7 +106,7 @@ parts:
     matrix:
       run:      [1, 2]
       pitch:    [shallow, steep]
-      material: [shingle_ceramic]
+      material: [shingle_ceramic, reed]
 
   # Trim caps that sit over a mitred corner, for creators who want the raised detail.
   - type: roof
@@ -109,7 +119,7 @@ parts:
     matrix:
       run:      [1, 2]
       pitch:    [shallow, steep]
-      material: [shingle_ceramic]
+      material: [shingle_ceramic, reed]
 
   - type: roof
     piece: valley_cap
@@ -121,4 +131,4 @@ parts:
     matrix:
       run:      [1, 2]
       pitch:    [shallow, steep]
-      material: [shingle_ceramic]
+      material: [shingle_ceramic, reed]
