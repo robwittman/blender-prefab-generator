@@ -1,0 +1,124 @@
+version: 1
+
+library:
+  name: Core Roof Kit
+  version: "0.1.0"
+
+output:
+  dir: ../build
+  models_dir: models
+  thumbnails_dir: thumbnails
+  manifest: manifest-roofs.json
+  format: blend
+  thumbnails: { enabled: true, size: 512, samples: 48 }
+
+textures:
+  root: ../textures
+
+materials:
+  shingle_ceramic:
+    display_name: Ceramic Shingle
+    dir: shingle_ceramic
+    maps:
+      albedo: roof_07_diff_4k.jpg
+      ao: roof_07_ao_4k.jpg
+      normal: roof_07_nor_gl_4k.jpg
+      roughness: roof_07_rough_4k.jpg
+      height: roof_07_disp_4k.jpg
+
+# Pitch is named, not typed inline, so every piece that has to meet another piece is
+# guaranteed to use the identical angle. 26.565 deg is atan(1/2): a 1m run rises
+# exactly 0.5m, so ridge heights land on the same grid the walls use. An "almost"
+# angle like 26 deg rises 0.9755m over 2m and puts every gable off-grid.
+roof:
+  pitches:
+    shallow: { rise: 1, run: 2 }   # 1:2 - exactly atan(0.5), 26.565051...deg
+    steep:   { rise: 1, run: 1 }   # 1:1 - 45deg
+    # `angle: 26.565` also works, but a rounded decimal makes a 2m run rise 0.999998m.
+
+defaults:
+  thickness: 0.18       # roof slab thickness, measured perpendicular to the slope
+  origin: footprint_center
+  min_border: 0.1
+
+parts:
+  # Slabs tile a square plan grid: span runs along the eave, run is horizontal depth
+  # up the slope. The sloped panel is longer than its run by 1/cos(pitch), which is
+  # what "accounting for the angle" buys you - the footprint still matches the walls.
+  - type: roof
+    piece: slab
+    category: Roofs
+    tags: [roof, modular]
+    id_template: "{type}.{piece}.{span_mm}x{run_mm}.{pitch}.{material}"
+    name: "roof_slab_{span}x{run}_{pitch}_{material}"
+    display_name: "{material} roof slab {span}x{run} ({pitch})"
+    matrix:
+      span:     [1, 2, 4]
+      run:      [1, 2]
+      pitch:    [shallow, steep]
+      material: [shingle_ceramic]
+
+  # Ridge cap. Its cross-section angle is derived from the pitch, so a shallow ridge
+  # opens to 126.87 deg and a steep one to 90 deg.
+  - type: roof
+    piece: ridge
+    category: Roofs
+    tags: [roof, modular, trim]
+    id_template: "{type}.{piece}.{span_mm}.{pitch}.{material}"
+    name: "roof_ridge_{span}_{pitch}_{material}"
+    display_name: "{material} ridge {span} ({pitch})"
+    matrix:
+      span:     [1, 2, 4]
+      pitch:    [shallow, steep]
+      material: [shingle_ceramic]
+
+  # Outside corner: two roof planes mitred along the diagonal, surface z = min(x,y)*tan.
+  - type: roof
+    piece: hip
+    category: Roofs
+    tags: [roof, modular, corner]
+    id_template: "{type}.{piece}.{run_mm}.{pitch}.{material}"
+    name: "roof_hip_{run}_{pitch}_{material}"
+    display_name: "{material} hip corner {run} ({pitch})"
+    matrix:
+      run:      [1, 2]
+      pitch:    [shallow, steep]
+      material: [shingle_ceramic]
+
+  # Inside corner: surface z = max(x,y)*tan, diagonal is the low line.
+  - type: roof
+    piece: valley
+    category: Roofs
+    tags: [roof, modular, corner]
+    id_template: "{type}.{piece}.{run_mm}.{pitch}.{material}"
+    name: "roof_valley_{run}_{pitch}_{material}"
+    display_name: "{material} valley corner {run} ({pitch})"
+    matrix:
+      run:      [1, 2]
+      pitch:    [shallow, steep]
+      material: [shingle_ceramic]
+
+  # Trim caps that sit over a mitred corner, for creators who want the raised detail.
+  - type: roof
+    piece: hip_cap
+    category: Roofs
+    tags: [roof, modular, trim]
+    id_template: "{type}.{piece}.{run_mm}.{pitch}.{material}"
+    name: "roof_hipcap_{run}_{pitch}_{material}"
+    display_name: "{material} hip cap {run} ({pitch})"
+    matrix:
+      run:      [1, 2]
+      pitch:    [shallow, steep]
+      material: [shingle_ceramic]
+
+  - type: roof
+    piece: valley_cap
+    category: Roofs
+    tags: [roof, modular, trim]
+    id_template: "{type}.{piece}.{run_mm}.{pitch}.{material}"
+    name: "roof_valleycap_{run}_{pitch}_{material}"
+    display_name: "{material} valley cap {run} ({pitch})"
+    matrix:
+      run:      [1, 2]
+      pitch:    [shallow, steep]
+      material: [shingle_ceramic]

@@ -1,0 +1,88 @@
+version: 1
+
+library:
+  name: Core Wall Kit
+  version: "0.1.0"
+
+output:
+  dir: ../build
+  models_dir: models
+  thumbnails_dir: thumbnails
+  manifest: manifest.json
+  format: blend            # blend | glb | fbx, or a list of them
+  pack_textures: false     # true embeds a copy of every texture in every prefab
+  thumbnails:
+    enabled: true
+    size: 512
+    samples: 48
+
+textures:
+  root: ../textures        # map paths below resolve against this
+
+# Unzip a texture set into textures/<name>/ and it is picked up automatically: files
+# are matched to roles by their trailing token, so ambientCG / cc0-textures names
+# (Bricks075A_2K-JPG_Color.jpg, _NormalGL.jpg, _Roughness.jpg, _AmbientOcclusion.jpg)
+# work as-is, as do plain albedo/normal/roughness names, in any image format.
+# Run `python3 -m prefabgen textures config/walls.yaml` to see what was found.
+#
+# Missing files warn and fall back to base_color, so the kit builds before art lands.
+# tile_size is the number of metres one texture repeat covers - tune it per material
+# once real textures are in, or brick will tile at the wrong density.
+#
+# Per-material overrides, all optional:
+#   dir: Bricks075A_2K-JPG   # look in this folder instead of one named for the material
+#   maps:                    # override individual roles; the rest still auto-resolve
+#     albedo: Bricks075A_2K-JPG_Color.jpg
+#     ao: null               # null suppresses a map that was found but is unwanted
+#   normal_flip_green: true  # force the DirectX->OpenGL flip (auto-detected for *NormalDX)
+materials:
+  red_brick:
+    dir: brick_red
+    maps:
+      albedo: brick_4_diff_4k.jpg
+      ao: brick_4_ao_4k.jpg
+      normal: brick_4_nor_gl_4k.jpg
+      roughness: brick_4_rough_4k.jpg
+
+  brown_planks:
+    dir: planks_brown
+    maps:
+      albedo: brown_planks_07_diff_4k.jpg
+      ao: brown_planks_07_ao_4k.jpg
+      normal: brown_planks_07_nor_gl_4k.jpg
+      roughness: brown_planks_07_rough_4k.jpg
+      height: brown_planks_07_disp_4k.jpg
+    # Real geometric depth displaced from the height map. Costs vertices, so it is
+    # opt-in per material - leave it off for flat surfaces like plaster.
+    relief:
+      strength: 0.09      # metres of displacement at full white
+      resolution: 0.05    # metres per grid cell - drives both fidelity and vertex count
+      feather: 0.03       # relief ramps to flat this far from any mating plane
+
+defaults:
+  origin: bottom_center    # bottom_center | center | min_corner
+  thickness: 0.2
+  min_border: 0.1          # solid material required around an opening
+
+parts:
+  - type: wall
+    source: procedural
+    category: Walls
+    tags: [wall, modular]
+    # Ids are what creator-authored levels reference, so they must stay stable.
+    # Omit this and one is derived from the matrix axes automatically.
+    id_template: "{type}.{width_mm}x{height_mm}x{thickness_mm}.{opening}.{material}"
+    name: "wall_{width}x{height}_{opening}_{material}"
+    display_name: "{material} wall {width}x{height} ({opening})"
+    matrix:
+      width:     [1, 2, 4]
+      height:    [2.5, 4]
+      thickness: [0.2]
+      opening:   [solid, door, window]
+      material:  [red_brick, brown_planks]
+    openings:
+      solid:  null
+      door:   { width: 0.9, height: 2.1, sill: 0.0 }
+      window: { width: 1.2, height: 1.2, sill: 1.0 }
+    exclude:
+      - { width: 1, opening: window }   # too cramped to be useful in the kit
