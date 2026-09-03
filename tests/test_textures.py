@@ -167,14 +167,23 @@ def test_relief_resolves_when_a_height_map_is_present():
         plan = resolve(_cfg(d, {"planks": {"relief": {"strength": 0.05, "resolution": 0.02}}}))
         relief = plan.materials["planks"].relief
         assert relief.strength == 0.05 and relief.resolution == 0.02
-        assert relief.feather == 0.06          # default kept
+        assert relief.mid_level == 0.5         # default kept
 
 
 def test_relief_true_uses_all_defaults():
     with tempfile.TemporaryDirectory() as d:
         _make(d, *[os.path.join("planks", f) for f in POLYHAVEN])
         relief = resolve(_cfg(d, {"planks": {"relief": True}})).materials["planks"].relief
-        assert (relief.strength, relief.resolution, relief.feather) == (0.03, 0.05, 0.06)
+        assert (relief.strength, relief.resolution, relief.mid_level) == (0.03, 0.05, 0.5)
+
+
+def test_configs_still_setting_the_removed_feather_key_are_accepted():
+    # Relief now displaces along the wall axis, so borders no longer need flattening;
+    # configs written against the old feathered version must not start failing.
+    with tempfile.TemporaryDirectory() as d:
+        _make(d, *[os.path.join("planks", f) for f in POLYHAVEN])
+        plan = resolve(_cfg(d, {"planks": {"relief": {"strength": 0.05, "feather": 0.06}}}))
+        assert plan.materials["planks"].relief.strength == 0.05
 
 
 def test_relief_without_a_height_map_warns_instead_of_failing():

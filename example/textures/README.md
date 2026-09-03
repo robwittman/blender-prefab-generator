@@ -74,7 +74,6 @@ grazing angles. Opt a material into real displaced geometry:
       relief:
         strength: 0.03      # metres of displacement at full white
         resolution: 0.05    # metres per grid cell - drives fidelity and vertex count
-        feather: 0.06       # relief ramps to flat this far from any mating plane
 
 `relief: true` accepts all defaults. It requires a height map; asking for it without
 one warns and leaves the surface flat rather than failing the build.

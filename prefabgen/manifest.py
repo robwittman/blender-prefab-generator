@@ -31,6 +31,10 @@ def compose(plan, report: dict) -> dict:
             "material": spec.material.name,
             "openings": [o.to_dict() for o in getattr(spec, "openings", ())],
             "piece": getattr(spec, "piece", None),
+            "fits": getattr(spec, "fits", None),
+            "animation": (spec.animation.to_dict()
+                          if getattr(spec, "animation", None) else None),
+            "parts": stats.get(spec.id, {}).get("parts"),
             "vertices": stats.get(spec.id, {}).get("vertices"),
             "relief": stats.get(spec.id, {}).get("relief"),
             "files": files,

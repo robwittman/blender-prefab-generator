@@ -11,7 +11,9 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
+# Append, don't prepend: once installed this is site-packages, and
+# prepending it would shadow Blender's own bundled modules.
+sys.path.append(os.path.dirname(os.path.dirname(_HERE)))
 
 import bpy  # noqa: E402
 from mathutils import Vector  # noqa: E402
@@ -240,6 +242,104 @@ def _designs(specs):
     return [cottage, shed, tower]
 
 
+def _edge_pieces(specs, length, height, material, wanted):
+    """Split one edge into wall pieces, preferring several narrow ones for variety.
+
+    Falls back to a single full-width wall when the kit has no half-width piece.
+    """
+    half = length / 2.0
+    if len(wanted) > 1 and try_find(specs, type="wall", width=half, height=height,
+                                    material=material):
+        return [(half, opening) for opening in wanted]
+    return [(length, wanted[0])]
+
+
+def _fill(specs, kind, prefs):
+    """The joinery that goes in the hole a wall just cut.
+
+    A joinery root's origin IS the wall origin, so it drops in at the identical
+    transform - that property is the whole point of the shared opening library.
+    """
+    if kind not in ("door", "window"):
+        return None
+    wanted = dict((prefs or {}).get(kind) or {})
+    for criteria in (wanted, {}):          # fall back to anything that fits the hole
+        spec = try_find(specs, type=kind, fits=kind, **criteria)
+        if spec:
+            return spec
+    return None
+
+
+def _edge(specs, cx, cy, w, d, z, height, material, edge, wanted, fill=None):
+    """Place a row of wall pieces along one edge of a w x d footprint."""
+    length = w if edge in ("south", "north") else d
+    pieces = _edge_pieces(specs, length, height, material, wanted)
+    sx, sy, rot = {"south": (0, -1, 0.0), "north": (0, 1, math.pi),
+                   "east": (1, 0, HALF_PI), "west": (-1, 0, -HALF_PI)}[edge]
+
+    out, cursor = [], -length / 2.0
+    for piece_w, want in pieces:
+        spec = None
+        for opening in (want, "solid"):
+            spec = try_find(specs, type="wall", width=piece_w, height=height,
+                            opening=opening, material=material)
+            if spec:
+                break
+        if spec is None:
+            raise LookupError(f"no {piece_w}x{height} {material} wall")
+        along = cursor + piece_w / 2.0
+        ox = sx * (w / 2 - spec.thickness / 2 - LAP) + (along if sy else 0.0)
+        oy = sy * (d / 2 - spec.thickness / 2 + LAP) + (along if sx else 0.0)
+        out.append(S.place(S.make(spec), cx + ox, cy + oy, z, rot))
+        opening = spec.openings[0].kind if spec.openings else "solid"
+        joinery = _fill(specs, opening, fill)
+        if joinery:
+            out.append(S.place(S.make(joinery), cx + ox, cy + oy, z, rot))
+        cursor += piece_w
+    return out
+
+
+def hero(specs, path, width, height, samples, wall_material=None, roof_material=None,
+         joinery_material=None, leaf_style=None):
+    """One building, framed close, at print resolution - thumbnails flatten the detail
+    that relief and 4K textures actually carry."""
+    S.scene(samples)
+
+    wall_mats = catalogue(specs, "wall", "material")
+    roof_mats = catalogue(specs, "roof", "material")
+    wm = wall_material if wall_material in wall_mats else (wall_mats or ["Default"])[0]
+    rm = roof_material if roof_material in roof_mats else (roof_mats or ["Default"])[0]
+    pitches = catalogue(specs, "roof", "pitch") or ["steep"]
+    pitch = "steep" if "steep" in pitches else pitches[-1]
+    h = min(catalogue(specs, "wall", "height") or [2.5])
+
+    hip = largest(specs, "run", type="roof", piece="hip", pitch=pitch, material=rm)
+    size = hip.run * 2
+
+    # Prefer the most divided glazing: a single undivided pane reads modern, and
+    # try_find otherwise returns whichever pattern the matrix listed first.
+    jm = joinery_material or "oak"
+    window = next((p for p in ("grid", "cross", "single")
+                   if try_find(specs, type="window", fits="window", pattern=p, material=jm)),
+                  None)
+    fill = {"door": {"leaf": leaf_style or "banded", "material": jm},
+            "window": {"material": jm, **({"pattern": window} if window else {})}}
+    made = []
+    made += _edge(specs, 0, 0, size, size, 0, h, wm, "south", ["door", "window"], fill)
+    made += _edge(specs, 0, 0, size, size, 0, h, wm, "east", ["window", "window"], fill)
+    made += _edge(specs, 0, 0, size, size, 0, h, wm, "north", ["window", "solid"], fill)
+    made += _edge(specs, 0, 0, size, size, 0, h, wm, "west", ["solid", "window"], fill)
+    made += _hipped(specs, 0, 0, hip.run, h, pitch, rm)
+
+    S.ground(size * 12)
+    cam = S.aim(made, Vector((0, 0, h * 0.55)), pad=1.10, aspect=width / height)
+    S.corner_label(cam, f"{size:g}x{size:g}m  |  {wm} walls, {pitch} {rm} hip roof, "
+                        f"{jm} {leaf_style or 'banded'} door and {window or 'fixed'} windows",
+                   width / height)
+    print(f"HERO {size}x{size}m, {len(made)} pieces, {wm} + {rm}")
+    return S.render(path, width, height)
+
+
 def buildings(specs, path, width, height, samples):
     S.scene(samples)
     label_rot = S.VIEW.to_track_quat("-Z", "Y").to_euler()
@@ -280,6 +380,8 @@ def main(argv):
 
     if job.get("gallery"):
         print(f"[prefabgen] gallery -> {gallery(specs, job['gallery'], job['width'], job['height'], job['samples'])}")
+    if job.get("hero"):
+        print(f"[prefabgen] hero -> {hero(specs, job['hero'], job['hero_width'], job['hero_height'], job['hero_samples'], job.get('hero_wall'), job.get('hero_roof'), job.get('hero_joinery'), job.get('hero_leaf'))}")
     if job.get("buildings"):
         print(f"[prefabgen] buildings -> {buildings(specs, job['buildings'], job['width'], job['height'], job['samples'])}")
 

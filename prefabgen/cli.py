@@ -50,6 +50,15 @@ def build_plan(args):
 
 
 def _describe(spec) -> str:
+    if spec.type == "gable":
+        return f"{spec.width}m {spec.shape}, apex {spec.apex:.3f}m @{spec.pitch}"
+    if spec.type == "corner":
+        return f"{spec.arm}m arms x {spec.height}m, {spec.thickness}m thick"
+    if spec.type in ("door", "window"):
+        variant = spec.leaf or spec.pattern or "fixed"
+        moving = spec.animation.kind if spec.animation.kind != "none" else "static"
+        return (f"fits {spec.fits} {spec.opening.width}x{spec.opening.height}m, "
+                f"clear {spec.clear_width:.3f}x{spec.clear_height:.3f}m, {variant}, {moving}")
     if spec.type == "roof":
         return (f"{spec.span}x{spec.run}m run, rise {spec.rise:.3f}m, "
                 f"slope {spec.slope_length:.3f}m @{spec.angle}deg")
@@ -189,9 +198,14 @@ def cmd_showcase(args) -> int:
     target = os.path.abspath(args.out) if args.out else out_dir
     job = {
         "specs": [s.to_dict() for s in specs],
-        "gallery": None if args.only == "buildings" else os.path.join(target, "gallery.png"),
-        "buildings": None if args.only == "gallery" else os.path.join(target, "buildings.png"),
+        "gallery": os.path.join(target, "gallery.png") if args.only in (None, "gallery") else None,
+        "buildings": os.path.join(target, "buildings.png") if args.only in (None, "buildings") else None,
+        "hero": os.path.join(target, "hero.png") if args.only in (None, "hero") else None,
         "width": args.width, "height": args.height, "samples": args.samples,
+        "hero_width": args.hero_width, "hero_height": args.hero_height,
+        "hero_samples": args.hero_samples,
+        "hero_wall": args.hero_wall, "hero_roof": args.hero_roof,
+        "hero_joinery": args.hero_joinery, "hero_leaf": args.hero_leaf,
     }
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(job, fh)
@@ -226,10 +240,19 @@ def main(argv=None) -> int:
     show = sub.add_parser("showcase")
     show.add_argument("configs", nargs="+", help="one or more config files to pool")
     show.add_argument("--out", help="directory for gallery.png / buildings.png")
-    show.add_argument("--only", choices=["gallery", "buildings"], help="render just one")
+    show.add_argument("--only", choices=["gallery", "buildings", "hero"],
+                      help="render just one")
     show.add_argument("--width", type=int, default=3200)
     show.add_argument("--height", type=int, default=1800)
     show.add_argument("--samples", type=int, default=96)
+    show.add_argument("--hero-width", type=int, default=2800)
+    show.add_argument("--hero-height", type=int, default=2000)
+    show.add_argument("--hero-samples", type=int, default=192,
+                      help="hero shot is one close-up image, so it can afford more")
+    show.add_argument("--hero-wall", default="brown_planks", help="wall material for the hero shot")
+    show.add_argument("--hero-roof", default="shingle_ceramic", help="roof material for the hero shot")
+    show.add_argument("--hero-joinery", default="oak", help="door/window material for the hero shot")
+    show.add_argument("--hero-leaf", default="banded", help="door leaf style for the hero shot")
     show.add_argument("--blender", help="path to the Blender executable")
     show.add_argument("--verbose", action="store_true")
     show.set_defaults(func=cmd_showcase)

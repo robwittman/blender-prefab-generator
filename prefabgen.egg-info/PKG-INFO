@@ -1,3 +1,13 @@
+Metadata-Version: 2.4
+Name: prefabgen
+Version: 0.1.0
+Summary: Generate a library of modular game-asset prefabs from a config file, using Blender headlessly
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: pyyaml>=5.1
+Provides-Extra: dev
+Requires-Dist: pytest>=7; extra == "dev"
+
 # blender-prefab-generator
 
 Generate a library of modular game assets from a config file. You describe a matrix of
@@ -12,39 +22,15 @@ without managing models or materials themselves.
 
 - **Blender 4.2+** (found automatically at the usual install paths, or set `$BLENDER` /
   pass `--blender`)
-- **Python 3.9+** for the CLI (`pyyaml` comes in with the install). Blender's own
-  bundled Python runs the geometry and needs nothing installed — the Blender-side
-  modules import only the standard library, which is why the split exists.
-
-## Install
-
-```bash
-python3 -m pip install -e ".[dev]"     # editable: code changes take effect immediately
-```
-
-That puts a `prefabgen` command on your PATH, runnable from any directory. Paths in a
-config resolve relative to *the config file*, not your shell, so output always lands
-beside the config no matter where you invoke it:
-
-```bash
-cd ~/anywhere
-prefabgen build ~/Repos/blender-prefab-generator/example/config/walls.yaml
-```
-
-Using **asdf**? Console scripts need a shim before they appear on PATH:
-
-```bash
-asdf reshim python
-```
-
-Without installing, `python3 -m prefabgen ...` works from the repo root.
+- **Python 3.9+** with `pyyaml`, for the CLI. Blender's own bundled Python runs the
+  geometry, and needs nothing installed.
 
 ## Quick start
 
 ```bash
-prefabgen textures example/config/walls.yaml   # what textures resolved
-prefabgen plan     example/config/walls.yaml   # what would be generated
-prefabgen build    example/config/walls.yaml   # generate it
+python3 -m prefabgen textures example/config/walls.yaml   # what textures resolved
+python3 -m prefabgen plan     example/config/walls.yaml   # what would be generated
+python3 -m prefabgen build    example/config/walls.yaml   # generate it
 ```
 
 The bundled example builds 68 wall prefabs (walls, gables, corners), 68 roof prefabs
@@ -53,8 +39,8 @@ and 14 doors/windows.
 Iterating? Thumbnails dominate the runtime, so skip them:
 
 ```bash
-prefabgen build example/config/walls.yaml --no-thumbnails
-prefabgen build example/config/walls.yaml --filter '*_brick' --no-thumbnails
+python3 -m prefabgen build example/config/walls.yaml --no-thumbnails
+python3 -m prefabgen build example/config/walls.yaml --filter '*_brick' --no-thumbnails
 ```
 
 `--filter` is a glob over prefab names or ids. Note a filtered build rewrites the
@@ -63,7 +49,7 @@ manifest with only what it built, so run an unfiltered build before shipping.
 ### Showcase images
 
 ```bash
-prefabgen showcase example/config/walls.yaml example/config/roofs.yaml example/config/joinery.yaml
+python3 -m prefabgen showcase example/config/walls.yaml example/config/roofs.yaml
 ```
 
 Pools any number of configs and renders three images for playtester feedback:
@@ -191,6 +177,7 @@ because it costs vertices: a 2×2.5m wall goes from 8 to ~4,200.
 ## Tests
 
 ```bash
+pip install pytest              # not currently installed
 python3 -m pytest tests -q      # 65 tests
 ```
 

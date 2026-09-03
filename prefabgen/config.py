@@ -10,7 +10,8 @@ from . import color
 from . import textures as textures_mod
 from .ids import DEFAULT_ID_TEMPLATE, make_id
 from .matrix import expand, render_name
-from .spec import (MAP_ROLES, MaterialSpec, Opening, ReliefSpec, RoofSpec, WallSpec,
+from .spec import (MAP_ROLES, AnimationSpec, CornerSpec, FrameSpec, GableSpec,
+                    JoinerySpec, MaterialSpec, Opening, ReliefSpec, RoofSpec, WallSpec,
                     validate)
 
 DEFAULT_MIN_BORDER = 0.1
@@ -72,12 +73,19 @@ def resolve(cfg: dict, base_dir: str = ".") -> Plan:
 
     specs, skipped, seen_ids, seen_names = [], [], {}, set()
 
-    pitches = _pitches(cfg.get("roof", {}) or {})
+    # Pitches are a shared library like materials and openings. Gables live with the
+    # walls and roofs live in their own config, but both must use the identical angle
+    # or a gable will not meet the roof it is closing.
+    pitch_src = dict(cfg.get("pitches") or {})
+    pitch_src.update((cfg.get("roof") or {}).get("pitches") or {})
+    pitches = _pitches({"pitches": pitch_src})
+    openings = _openings(cfg.get("openings", {}) or {})
 
     for part in cfg.get("parts", []) or []:
         ptype = part.get("type", "wall")
-        if ptype not in ("wall", "roof"):
-            raise ValueError(f"unsupported part type {ptype!r} (known: wall, roof)")
+        if ptype not in ("wall", "roof", "door", "window", "gable", "corner"):
+            raise ValueError(f"unsupported part type {ptype!r} "
+                             "(known: wall, roof, door, window, gable, corner)")
         source = part.get("source", defaults.get("source", "procedural"))
         if source != "procedural":
             raise ValueError(f"unsupported source {source!r} (only 'procedural' so far)")
@@ -93,6 +101,16 @@ def resolve(cfg: dict, base_dir: str = ".") -> Plan:
             fields = dict(combo)
             if ptype == "roof":
                 fields["piece"] = part["piece"]
+            if ptype == "corner":
+                fields["arm_mm"] = int(round(float(part.get("arm", 1.0)) * 1000))
+            if ptype in ("door", "window"):
+                fits = part.get("fits")
+                if fits not in openings or openings[fits] is None:
+                    raise ValueError(f"{ptype} part 'fits: {fits!r}' is not a defined "
+                                     f"opening (known: {sorted(k for k, v in openings.items() if v)})")
+                fields["fits"] = fits
+                fields["opening_w_mm"] = int(round(openings[fits].width * 1000))
+                fields["opening_h_mm"] = int(round(openings[fits].height * 1000))
 
             name = render_name(template, fields)
             pid = make_id(ptype, fields, id_tpl)
@@ -113,9 +131,15 @@ def resolve(cfg: dict, base_dir: str = ".") -> Plan:
             )
 
             if ptype == "wall":
-                spec = _wall_spec(part, defaults, combo, materials, common)
-            else:
+                spec = _wall_spec(part, defaults, combo, materials, common, openings)
+            elif ptype == "roof":
                 spec = _roof_spec(part, defaults, combo, pitches, common)
+            elif ptype == "gable":
+                spec = _gable_spec(part, defaults, combo, pitches, common)
+            elif ptype == "corner":
+                spec = _corner_spec(part, defaults, combo, common)
+            else:
+                spec = _joinery_spec(part, defaults, combo, openings, materials, common)
 
             reason = validate(spec, min_border)
             (skipped.append(Skipped(name, reason)) if reason else specs.append(spec))
@@ -127,6 +151,61 @@ def resolve(cfg: dict, base_dir: str = ".") -> Plan:
                 thumbnails=thumbs, manifest=out.get("manifest", "manifest.json"),
                 pack_textures=bool(out.get("pack_textures", False)),
                 library=cfg.get("library", {}) or {}, warnings=warnings)
+
+
+def _openings(raw: dict) -> dict:
+    """The shared opening library. Walls cut these; joinery fills them."""
+    out = {}
+    for name, entry in raw.items():
+        out[name] = None if entry is None else Opening.from_dict({"kind": name, **entry})
+    return out
+
+
+def _joinery_spec(part, defaults, combo, openings, materials, common):
+    ptype = part.get("type", "door")
+    opening = openings[part["fits"]]
+    slots = {}
+    for slot, ref in (part.get("slots") or {}).items():
+        name = ref.format(**combo) if isinstance(ref, str) else ref
+        slots[slot] = _lookup_material(materials, name, defaults)
+
+    common = dict(common)
+    common.pop("material", None)          # joinery carries a slot map, not one material
+    return JoinerySpec(
+        fits=part["fits"], opening=opening,
+        wall_thickness=float(part.get("wall_thickness",
+                                      defaults.get("wall_thickness", 0.2))),
+        frame=FrameSpec.from_dict(part.get("frame")),
+        animation=AnimationSpec.from_dict(part.get("animation")),
+        slots=slots,
+        leaf=str(combo.get("leaf", "")), hinge=str(combo.get("hinge", "")),
+        pattern=str(combo.get("pattern", "")),
+        leaf_thickness=float(part.get("leaf_thickness", 0.045)),
+        glazing_bar=float(part.get("glazing_bar", 0.028)),
+        origin=part.get("origin", defaults.get("origin", "wall_origin")),
+        category=part.get("category", "Doors" if ptype == "door" else "Windows"),
+        type=ptype, **common)
+
+
+def _gable_spec(part, defaults, combo, pitches, common):
+    pitch = combo.get("pitch")
+    if pitch not in pitches:
+        raise ValueError(f"pitch {pitch!r} is not defined under 'pitches' "
+                         f"(known: {sorted(pitches)})")
+    return GableSpec(
+        shape=str(combo.get("shape", "full")), width=float(combo["width"]),
+        thickness=float(combo.get("thickness", defaults.get("thickness", 0.2))),
+        angle=pitches[pitch], pitch=pitch,
+        origin=part.get("origin", defaults.get("origin", "bottom_center")),
+        category=part.get("category", "Walls"), type="gable", **common)
+
+
+def _corner_spec(part, defaults, combo, common):
+    return CornerSpec(
+        arm=float(part.get("arm", 1.0)), height=float(combo["height"]),
+        thickness=float(combo.get("thickness", defaults.get("thickness", 0.2))),
+        origin=part.get("origin", "outer_corner"),
+        category=part.get("category", "Walls"), type="corner", **common)
 
 
 def _pitches(raw: dict) -> dict:
@@ -154,12 +233,12 @@ def _pitches(raw: dict) -> dict:
     return out
 
 
-def _wall_spec(part, defaults, combo, materials, common):
+def _wall_spec(part, defaults, combo, materials, common, shared=None):
     reveal_name = part.get("reveal_material", defaults.get("reveal_material"))
     return WallSpec(
         width=float(combo["width"]), height=float(combo["height"]),
         thickness=float(combo.get("thickness", defaults.get("thickness", 0.2))),
-        openings=_openings_for(combo, part.get("openings", {}) or {}),
+        openings=_openings_for(combo, part.get("openings", {}) or {}, shared),
         reveal_material=materials[reveal_name] if reveal_name else None,
         origin=part.get("origin", defaults.get("origin", "bottom_center")),
         category=part.get("category", "Walls"), type="wall", **common)
@@ -219,6 +298,8 @@ def _materials(raw: dict, tex_root: str):
             name=name, display_name=m.get("display_name", name.replace("_", " ").title()),
             tile_size=float(m.get("tile_size", 1.0)), maps=maps,
             base_color=color.parse(m.get("base_color")),
+            kind=m.get("kind", "opaque"),
+            opacity=float(m.get("opacity", 1.0)),
             roughness=float(m.get("roughness", 0.8)),
             metallic=float(m.get("metallic", 0.0)),
             normal_strength=float(m.get("normal_strength", 1.0)),
@@ -261,14 +342,20 @@ def _lookup_material(materials: dict, key, defaults: dict) -> MaterialSpec:
     return materials[key]
 
 
-def _openings_for(combo: dict, presets: dict) -> tuple:
+def _openings_for(combo: dict, presets: dict, shared: dict = None) -> tuple:
+    """Part-local presets win; anything else resolves against the shared library."""
     key = combo.get("opening")
     if key is None:
         return ()
-    if key not in presets:
-        raise ValueError(f"opening preset {key!r} is not defined under 'openings'")
-    preset = presets[key]
+    merged = dict(shared or {})
+    merged.update(presets)
+    if key not in merged:
+        raise ValueError(f"opening {key!r} is not defined locally or under the "
+                         f"top-level 'openings' (known: {sorted(merged)})")
+    preset = merged[key]
     if preset is None:
         return ()
+    if isinstance(preset, Opening):
+        return (preset,)
     entries = preset if isinstance(preset, list) else [preset]
     return tuple(Opening.from_dict({"kind": key, **e}) for e in entries)

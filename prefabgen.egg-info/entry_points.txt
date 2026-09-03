@@ -1,0 +1,2 @@
+[console_scripts]
+prefabgen = prefabgen.cli:main

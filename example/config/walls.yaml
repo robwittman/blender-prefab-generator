@@ -57,7 +57,18 @@ materials:
     relief:
       strength: 0.09      # metres of displacement at full white
       resolution: 0.05    # metres per grid cell - drives both fidelity and vertex count
-      feather: 0.03       # relief ramps to flat this far from any mating plane
+
+# Gables must use the SAME angles as the roofs that sit on them. Keep these identical
+# to roofs.yaml - see the note in Known Gaps about hoisting them into a shared include.
+pitches:
+  shallow: { rise: 1, run: 2 }   # 1:2 - exactly atan(0.5)
+  steep:   { rise: 1, run: 1 }   # 1:1 - 45deg
+
+# Shared with the joinery config: walls CUT these, doors and windows FILL them. One
+# definition, so a door cannot silently stop fitting the hole it was built for.
+openings:
+  door:   { width: 0.9, height: 2.1, sill: 0.0 }
+  window: { width: 1.2, height: 1.2, sill: 1.0 }
 
 defaults:
   origin: bottom_center    # bottom_center | center | min_corner
@@ -81,8 +92,37 @@ parts:
       opening:   [solid, door, window]
       material:  [red_brick, brown_planks]
     openings:
-      solid:  null
-      door:   { width: 0.9, height: 2.1, sill: 0.0 }
-      window: { width: 1.2, height: 1.2, sill: 1.0 }
+      solid:  null            # part-local; the rest resolve against the shared library
     exclude:
       - { width: 1, opening: window }   # too cramped to be useful in the kit
+
+  # Triangular wall closing a roof end. `left` and `right` are half gables meeting at a
+  # ridge on a unit boundary; `full` has a centred apex, for a roof pitching in the
+  # middle of a unit. No openings by design - a gable that needs one sits on a normal
+  # wall course and the opening goes in that wall.
+  - type: gable
+    source: procedural
+    category: Walls
+    tags: [wall, gable, modular]
+    id_template: "{type}.{width_mm}.{shape}.{pitch}.{material}"
+    name: "gable_{width}_{shape}_{pitch}_{material}"
+    display_name: "{material} {shape} gable {width}m ({pitch})"
+    matrix:
+      width:    [1, 2, 4]
+      shape:    [full, left, right]
+      pitch:    [shallow, steep]
+      material: [brown_planks, red_brick]
+
+  # L-shaped corner segment, one unit along each side. One mesh, so there is no
+  # internal join to z-fight the way four butted walls do.
+  - type: corner
+    source: procedural
+    category: Walls
+    tags: [wall, corner, modular]
+    arm: 1.0
+    id_template: "{type}.{arm_mm}x{height_mm}.{material}"
+    name: "corner_{height}_{material}"
+    display_name: "{material} corner {height}m"
+    matrix:
+      height:   [2.5, 4]
+      material: [brown_planks, red_brick]

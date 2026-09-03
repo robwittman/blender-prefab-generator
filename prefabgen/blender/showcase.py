@@ -17,6 +17,7 @@ import bpy
 from mathutils import Matrix, Vector
 
 from prefabgen.blender import build as build_mod
+from prefabgen.blender import joinery as joinery_mod
 from prefabgen.blender import relief as relief_mod
 from prefabgen.blender import roof as roof_mod
 from prefabgen.spec import spec_from_dict
@@ -80,16 +81,31 @@ def _light(name, location, size, power):
 
 # --- pieces -----------------------------------------------------------------
 
+BUILDERS = {"wall": build_mod.build, "roof": roof_mod.build,
+            "door": joinery_mod.build, "window": joinery_mod.build}
+
+
+def tree(obj):
+    """The object and every descendant. A door root is an empty with frame and leaf
+    beneath it, so anything measuring or linking must walk the whole hierarchy."""
+    out = [obj]
+    for child in obj.children:
+        out.extend(tree(child))
+    return out
+
+
 def make(spec, report=None):
-    builder = roof_mod.build if spec.type == "roof" else build_mod.build
-    obj = builder(spec, report)
-    bpy.context.collection.objects.link(obj)
+    obj = BUILDERS[spec.type](spec, report)
+    for node in tree(obj):
+        bpy.context.collection.objects.link(node)
+    bpy.context.view_layer.update()
     relief_mod.apply(obj, spec, report)
     return obj
 
 
 def bounds(obj):
-    cs = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+    meshes = [o for o in tree(obj) if o.type == "MESH"] or [obj]
+    cs = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
     return (Vector((min(c.x for c in cs), min(c.y for c in cs), min(c.z for c in cs))),
             Vector((max(c.x for c in cs), max(c.y for c in cs), max(c.z for c in cs))))
 
@@ -134,6 +150,26 @@ def label(text, location, size, rotation):
     obj.rotation_euler = rotation          # billboard: match the camera exactly
     obj.data.materials.append(_LABEL_MAT)
     bpy.context.collection.objects.link(obj)
+    return obj
+
+
+def corner_label(cam, text, aspect, size_frac=0.030, margin=0.05):
+    """Pin a caption to the bottom-left of the FRAME.
+
+    Placing captions at a guessed world offset works until the camera framing changes,
+    and then they drift across the subject. Deriving the position from the camera's own
+    ortho extents keeps them in the corner whatever gets framed.
+    """
+    half_w = cam.data.ortho_scale / 2.0
+    half_h = half_w / aspect
+    # Sit just in front of the camera. Pushing it far down the view ray buries it under
+    # the ground plane, since that ray points downward; with an ortho camera the depth
+    # changes nothing but occlusion, so closer is strictly better.
+    local = Vector((-half_w * (1 - margin), -half_h * (1 - margin), -2.0))
+    obj = label(text, cam.matrix_world @ local, half_w * size_frac,
+                cam.rotation_euler)
+    obj.data.align_x = "LEFT"
+    obj.data.align_y = "BOTTOM"
     return obj
 
 
@@ -186,7 +222,8 @@ def aim(targets, centre, pad=1.06, aspect=1.0):
 
 
 def _corners(obj):
-    return [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+    meshes = [o for o in tree(obj) if o.type == "MESH"] or [obj]
+    return [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
 
 
 def render(path, width, height):

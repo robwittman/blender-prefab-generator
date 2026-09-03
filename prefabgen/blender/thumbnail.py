@@ -63,9 +63,11 @@ def _look_at(eye, target):
     return (target - eye).to_track_quat("-Z", "Y").to_euler()
 
 
-def frame(cam, obj):
-    """Point the ortho camera at ``obj`` and fit it to the frame."""
-    corners = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+def frame(cam, target):
+    """Point the ortho camera at ``target`` (an object or a hierarchy) and fit it."""
+    objects = list(target) if isinstance(target, (list, tuple)) else [target]
+    meshes = [o for o in objects if o.type == "MESH"] or objects
+    corners = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
     centre = sum(corners, Vector()) / len(corners)
     radius = max((c - centre).length for c in corners) or 1.0
 

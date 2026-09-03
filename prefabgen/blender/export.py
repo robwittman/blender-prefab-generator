@@ -34,6 +34,7 @@ def _blend(path, pack_textures=True):
     bpy.ops.wm.save_as_mainfile(filepath=path, compress=False, copy=True)
 
 
+<<<<<<< Updated upstream
 def _glb(path, pack_textures=True):
     """glTF, packed or not.
 
@@ -66,6 +67,18 @@ def _fbx(path, pack_textures=True):
         path_mode="COPY" if pack_textures else "RELATIVE",
         embed_textures=pack_textures,
     )
+=======
+def _glb(path):
+    # export_extras defaults to False: without it the pivot contract on the leaf never
+    # reaches the engine, and the toolkit has no way to discover how a door opens.
+    bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=False,
+                              export_extras=True, export_animations=True)
+
+
+def _fbx(path):
+    bpy.ops.export_scene.fbx(filepath=path, use_selection=False, apply_unit_scale=True,
+                             bake_anim=True, use_custom_props=True)
+>>>>>>> Stashed changes
 
 
 _WRITERS = {"blend": _blend, "glb": _glb, "fbx": _fbx}

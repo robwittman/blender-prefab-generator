@@ -1,0 +1,105 @@
+version: 1
+
+library:
+  name: Core Joinery Kit
+  version: "0.1.0"
+
+output:
+  dir: ../build
+  models_dir: models
+  thumbnails_dir: thumbnails
+  manifest: manifest-joinery.json
+  # Design is format-agnostic. Godot's .blend import is an EDITOR-ONLY pipeline that
+  # shells out to Blender, so mods loaded at runtime need .glb via GLTFDocument.
+  # Add `glb` here once the mod loader is confirmed.
+  format: blend
+  thumbnails: { enabled: true, size: 512, samples: 48 }
+
+textures:
+  root: ../textures
+
+# Promoted to the top level: walls CUT these, joinery FILLS them, from one definition.
+# Same reasoning as named roof pitches - a door that silently stops fitting its hole is
+# invisible in config review and only shows up in game. Wall parts reference these by
+# name, so existing prefab ids are unaffected.
+openings:
+  door:   { width: 0.9, height: 2.1, sill: 0.0 }
+  window: { width: 1.2, height: 1.2, sill: 1.0 }
+
+materials:
+  oak:
+    dir: wood_oak
+    tile_size: 0.6
+    base_color: "#7a5a34"
+  painted:
+    base_color: "#c8c3b4"
+    roughness: 0.45
+  iron:
+    base_color: "#3b3b3f"
+    roughness: 0.35
+    metallic: 1.0
+  glazing:
+    # A new material KIND, not another texture set. Alpha blend rather than true
+    # transmission: KHR_materials_transmission is patchily supported, while alpha
+    # exports as glTF alphaMode BLEND and renders the same in Cycles.
+    kind: glass
+    base_color: "#e9f0f1"
+    opacity: 0.22
+    roughness: 0.03
+
+defaults:
+  wall_thickness: 0.2      # linings are built to fill the reveal of this wall
+
+parts:
+  # ---------------------------------------------------------------- doors
+  - type: door
+    category: Doors
+    tags: [door, joinery, modular]
+    fits: door                      # -> openings.door; dimensions come from there
+    id_template: "{type}.{opening_w_mm}x{opening_h_mm}.{leaf}.{hinge}.{material}"
+    name: "door_{leaf}_{hinge}_{material}"
+    display_name: "{material} {leaf} door, {hinge}-hung"
+    frame:
+      lining: 0.025               # boards lining the reveal, full wall depth
+      casing: 0.110               # heavy timber surround; thin flat casing reads modern
+      casing_depth: 0.024         # how far the casing stands proud of the wall
+      rebate: 0.018               # how far the leaf sits back from the front face
+      clearance: 0.003            # gap around the leaf so it does not bind
+    leaf_thickness: 0.045
+    slots:                        # material per face group, replacing the old 2-slot cap
+      frame:    "{material}"
+      leaf:     "{material}"
+      glass:    glazing           # used only by the glazed leaf
+      hardware: iron
+    animation:
+      kind: hinge
+      axis: z
+      open_degrees: 95            # sign follows handedness
+      frames: 24
+      clip: open                  # a normalised 0 -> open clip the toolkit can seek()
+    matrix:
+      leaf:     [braced, banded]
+      hinge:    [left, right]
+      material: [oak, painted]
+
+  # ---------------------------------------------------------------- windows
+  - type: window
+    category: Windows
+    tags: [window, joinery, modular]
+    fits: window
+    id_template: "{type}.{opening_w_mm}x{opening_h_mm}.{pattern}.{material}"
+    name: "window_{pattern}_{material}"
+    display_name: "{material} {pattern} window"
+    frame:
+      lining: 0.025
+      casing: 0.095               # match the doors; thin flat trim reads modern
+      casing_depth: 0.020
+      rebate: 0.015
+    glazing_bar: 0.042            # chunky bars; hairline ones read like modern glazing
+    slots:
+      frame: "{material}"
+      glass: glazing
+    animation: { kind: none }     # fixed glazing: one mesh, no hierarchy
+    matrix:
+      pattern:  [single, cross, grid]
+      material: [oak, painted]

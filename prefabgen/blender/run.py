@@ -11,7 +11,9 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
+# Append, don't prepend: once installed this is site-packages, and
+# prepending it would shadow Blender's own bundled modules.
+sys.path.append(os.path.dirname(os.path.dirname(_HERE)))
 
 import bpy  # noqa: E402
 
@@ -19,7 +21,9 @@ from prefabgen.blender import build as build_mod          # noqa: E402
 from prefabgen.blender import export as export_mod        # noqa: E402
 from prefabgen.blender import materials as materials_mod  # noqa: E402
 from prefabgen.blender import relief as relief_mod        # noqa: E402
+from prefabgen.blender import joinery as joinery_mod      # noqa: E402
 from prefabgen.blender import roof as roof_mod            # noqa: E402
+from prefabgen.blender import wallparts as wallparts_mod  # noqa: E402
 from prefabgen.blender import thumbnail as thumb_mod      # noqa: E402
 from prefabgen.spec import spec_from_dict                 # noqa: E402
 
@@ -45,22 +49,29 @@ def main(argv):
         scene.unit_settings.system = "METRIC"
         scene.unit_settings.scale_length = 1.0
 
-        builder = roof_mod.build if spec.type == "roof" else build_mod.build
+        builder = _BUILDERS[spec.type]
         obj = builder(spec, report)
-        bpy.context.collection.objects.link(obj)
+        # Doors are a hierarchy, not a single mesh, so link the whole tree.
+        tree = _tree(obj)
+        for node in tree:
+            bpy.context.collection.objects.link(node)
+        bpy.context.view_layer.update()      # parented children need world matrices
         stats = relief_mod.apply(obj, spec, report)
 
+        meshes = [o for o in tree if o.type == "MESH"]
         entry = {"id": spec.id, "files": {}, "relief": stats,
-                 "vertices": len(obj.data.vertices)}
+                 "parts": [{"name": o.name, "vertices": len(o.data.vertices)}
+                           for o in meshes] if len(meshes) > 1 else None,
+                 "vertices": sum(len(o.data.vertices) for o in meshes)}
 
         if thumbs_on:
             cam = thumb_mod.setup(job["thumbnails"]["size"], job["thumbnails"]["samples"])
-            thumb_mod.frame(cam, obj)
+            thumb_mod.frame(cam, tree)
             path = os.path.join(thumbs_dir, spec.name + ".png")
             thumb_mod.render(path)
             entry["files"]["thumbnail"] = path
             # The camera and lights must not end up inside the shipped prefab.
-            for helper in [o for o in scene.objects if o is not obj]:
+            for helper in [o for o in scene.objects if o not in tree]:
                 bpy.data.objects.remove(helper, do_unlink=True)
 
         # Non-.blend formats must be written while image paths are still absolute:
@@ -84,6 +95,24 @@ def main(argv):
     with open(job["report_path"], "w") as fh:
         json.dump(report, fh, indent=2)
     print(f"[prefabgen] done: {len(report['prefabs'])} prefab(s)")
+
+
+_BUILDERS = {
+    "wall": build_mod.build,
+    "roof": roof_mod.build,
+    "door": joinery_mod.build,
+    "window": joinery_mod.build,
+    "gable": wallparts_mod.build_gable,
+    "corner": wallparts_mod.build_corner,
+}
+
+
+def _tree(obj):
+    """The object and every descendant, parents before children."""
+    out = [obj]
+    for child in obj.children:
+        out.extend(_tree(child))
+    return out
 
 
 def _arg(args, flag):

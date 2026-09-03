@@ -29,6 +29,19 @@ def build(mspec, report=None):
     bsdf.inputs["Roughness"].default_value = mspec.roughness
     bsdf.inputs["Metallic"].default_value = mspec.metallic
 
+    if mspec.kind == "glass":
+        # Alpha rather than true transmission: KHR_materials_transmission is patchily
+        # supported by engines, while alpha exports as glTF alphaMode BLEND and looks
+        # the same in Cycles.
+        bsdf.inputs["Alpha"].default_value = mspec.opacity
+        for attr, value in (("blend_method", "BLEND"), ("surface_render_method", "BLENDED")):
+            try:
+                setattr(mat, attr, value)
+            except (AttributeError, TypeError):
+                pass
+        mat.use_backface_culling = False
+        return mat
+
     shader_maps = {r: p for r, p in mspec.maps.items() if r != "height"}
     images = {r: _load(p, report, mspec.name, r) for r, p in shader_maps.items()}
     images = {r: im for r, im in images.items() if im is not None}

@@ -7,11 +7,12 @@ blended normals, so they travel sideways off the mating plane. Two neighbouring 
 then overlap where the height map is bright and gap where it is dark, which shows up
 as cracks along every join (measured at 12mm of drift on a 2m wall).
 
-The fix is a vertex-group mask that ramps displacement to zero over ``feather`` metres
-at every surface a neighbour touches - the left/right mating planes, the floor and
-ceiling planes, and the opening reveals. Border vertices then do not move at all, so
-alignment is exact by construction rather than by luck, at the cost of the relief
-flattening out in that border band.
+The fix is to displace each skin along the wall's own Y axis instead. A border vertex
+then moves only in Y, so it stays exactly on the x = +-W/2 and z = 0/H planes however
+far it travels: alignment is exact by construction, and the relief runs full-strength
+right to the edge. Flattening the border to protect those planes - which is what a
+feathered mask does - leaves a flat band at every joint that reads as a ripple across
+an assembled wall.
 """
 import os
 
@@ -26,7 +27,7 @@ def apply(obj, spec, report=None):
     settings = mspec.relief
     if not settings:
         return None
-    if spec.type != "wall":
+    if spec.type not in ("wall", "gable", "corner"):
         _warn(report, mspec.name, f"relief is not implemented for {spec.type} parts yet; "
                                   f"{spec.name} stays flat")
         return None
@@ -41,26 +42,30 @@ def apply(obj, spec, report=None):
     bpy.context.view_layer.objects.active = obj
 
     _scaled_uvs(obj.data, mspec.tile_size)
-    group_name = _mask(obj, spec, settings.feather).name
+    groups = _relief_groups(obj)
 
     tex = bpy.data.textures.new(f"relief_{mspec.name}", type="IMAGE")
     tex.image = bpy.data.images.load(path, check_existing=True)
     tex.extension = "REPEAT"
 
-    dsp = obj.modifiers.new("Relief", "DISPLACE")
-    dsp.texture = tex
-    dsp.texture_coords = "UV"
-    dsp.uv_layer = UV_LAYER
-    dsp.direction = "NORMAL"
-    dsp.strength = settings.strength
-    dsp.mid_level = settings.mid_level
-    dsp.vertex_group = group_name
-    bpy.ops.object.modifier_apply(modifier=dsp.name)
+    # One pass per declared face group, each along its OWN axis. A flat wall is two
+    # groups on Y; a corner has faces in two axes and declares four.
+    for group, axis, sign in groups:
+        dsp = obj.modifiers.new(f"Relief_{group}", "DISPLACE")
+        dsp.texture = tex
+        dsp.texture_coords = "UV"
+        dsp.uv_layer = UV_LAYER
+        dsp.direction = axis.upper()
+        dsp.strength = sign * settings.strength
+        dsp.mid_level = settings.mid_level
+        dsp.vertex_group = group
+        bpy.ops.object.modifier_apply(modifier=dsp.name)
 
     # The scratch UV layer and mask must not ship inside the prefab.
     # Look both up by name: applying a modifier invalidates existing references.
     obj.data.uv_layers.remove(obj.data.uv_layers[UV_LAYER])
-    obj.vertex_groups.remove(obj.vertex_groups[group_name])
+    for group, _axis, _sign in groups:
+        obj.vertex_groups.remove(obj.vertex_groups[group])
     # The height map is consumed at build time; keep it out of the saved file.
     if tex.image.users <= 1:
         bpy.data.images.remove(tex.image)
@@ -85,39 +90,37 @@ def _scaled_uvs(mesh, tile_size):
     return scaled
 
 
-def _mask(obj, spec, feather):
-    group = obj.vertex_groups.new(name="_relief_mask")
-    W, H = spec.width, spec.height
-    rects = [o.bounds(W) for o in spec.openings]
-    for vert in obj.data.vertices:
-        x, z = _to_wall_local(vert.co, spec)
-        distance = min(x, W - x, z, H - z)
-        for rect in rects:
-            distance = min(distance, _distance_to_rect(x, z, rect))
-        weight = 0.0 if feather <= 0 else max(0.0, min(1.0, distance / feather))
-        group.add([vert.index], weight, "REPLACE")
-    return group
+PREFIX = "_relief_"
 
 
-def _to_wall_local(co, spec):
-    """Undo the origin shift applied in build._shift, giving x in [0, W], z in [0, H]."""
-    if spec.origin == "bottom_center":
-        return co.x + spec.width / 2.0, co.z
-    if spec.origin == "center":
-        return co.x + spec.width / 2.0, co.z + spec.height / 2.0
-    if spec.origin == "min_corner":
-        return co.x, co.z
-    raise ValueError(f"unknown origin mode {spec.origin!r}")
+def _relief_groups(obj):
+    """(group, axis, sign) triples describing what may move, and which way.
+
+    A builder that knows its own geometry can declare these itself; anything that does
+    not gets the default flat-panel split below.
+    """
+    declared = [g.name for g in obj.vertex_groups if g.name.startswith(PREFIX)]
+    if declared:
+        return [(name, name[len(PREFIX):][1], -1.0 if name[len(PREFIX)] == "-" else 1.0)
+                for name in sorted(declared)]
+    front, back = _skin_groups(obj)
+    return [(front, "y", -1.0), (back, "y", 1.0)]
 
 
-def _distance_to_rect(x, z, rect):
-    """Distance from (x, z) to an opening's border; zero on or inside it."""
-    x0, x1, z0, z1 = rect
-    dx = max(x0 - x, 0.0, x - x1)
-    dz = max(z0 - z, 0.0, z - z1)
-    if dx == 0.0 and dz == 0.0:
-        return 0.0
-    return (dx * dx + dz * dz) ** 0.5
+def _skin_groups(obj):
+    """Split the mesh into front-skin and back-skin vertices.
+
+    Every vertex sits on one of the two faces (relief only subdivides in x and z), so
+    the split is exact. The midpoint comes from the mesh bounds rather than y=0 so it
+    holds for every origin mode.
+    """
+    ys = [v.co.y for v in obj.data.vertices]
+    middle = (min(ys) + max(ys)) / 2.0
+    front = obj.vertex_groups.new(name="_relief_front")
+    back = obj.vertex_groups.new(name="_relief_back")
+    front.add([v.index for v in obj.data.vertices if v.co.y < middle], 1.0, "REPLACE")
+    back.add([v.index for v in obj.data.vertices if v.co.y >= middle], 1.0, "REPLACE")
+    return front.name, back.name
 
 
 def _warn(report, material, message):
