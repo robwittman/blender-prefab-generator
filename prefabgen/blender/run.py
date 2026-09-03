@@ -68,7 +68,9 @@ def main(argv):
         # "//" paths would not resolve and the exporter would silently drop textures.
         stem = os.path.join(models_dir, spec.name)
         for fmt in [f for f in job["formats"] if f != "blend"]:
-            entry["files"][fmt] = export_mod.write(fmt, stem)
+            # `pack_textures` reached the .blend branch below and nothing else, so every glTF and
+            # FBX embedded a private copy of every texture whatever the config said.
+            entry["files"][fmt] = export_mod.write(fmt, stem, job["pack_textures"])
 
         if "blend" in job["formats"]:
             if job["pack_textures"]:
