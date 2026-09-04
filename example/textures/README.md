@@ -78,13 +78,18 @@ grazing angles. Opt a material into real displaced geometry:
 `relief: true` accepts all defaults. It requires a height map; asking for it without
 one warns and leaves the surface flat rather than failing the build.
 
-**Why `feather` exists.** Naive displacement moves the module's *edges*: border
-vertices have 45-degree blended normals, so they travel sideways off the mating plane —
-measured at 12mm of drift on a 2m wall, which shows up as visible cracks along every
-join between neighbouring pieces. The mask ramps displacement to zero at every surface
-a neighbour touches (left/right mating planes, floor, ceiling, opening reveals), so
-those vertices do not move at all and alignment is exact by construction. The cost is
-that relief flattens out within `feather` metres of an edge.
+**Why relief displaces along the face axis.** Naive displacement moves the module's
+*edges*: border vertices have 45-degree blended normals, so they travel sideways off
+the mating plane — measured at 12mm of drift on a 2m wall, which shows up as visible
+cracks along every join between neighbouring pieces. Displacing each skin along the
+wall's own axis instead means a border vertex moves only in that axis, so it stays
+exactly on the mating plane however far it travels. Alignment is exact by construction
+*and* the relief runs full strength right to the edge.
+
+An earlier version masked the border to zero instead, over a `feather` band. That
+protected the planes but left a flat strip at every joint, which read as a ripple
+across an assembled wall. A `feather:` key is still accepted and ignored, so configs
+written against that version keep building.
 
 **`resolution` is metres per grid cell**, and it is what keeps relief consistent. The
 grid is laid down at build time rather than by subdividing the finished mesh, because
@@ -106,6 +111,6 @@ are genuinely flat (plaster, concrete). Every prefab's vertex count is in
 `manifest.json` so the budget stays visible.
 
 **Tuning depth.** `strength` is metres of displacement at full white; the default 0.03
-is subtle at a distance. Note the `feather` band is flat by construction, so relief
-never shows in the outermost silhouette - it reads as shading on the face. For
-pronounced board or brick depth try `strength: 0.09` with `feather: 0.03`.
+is subtle at a distance. Because displacement now reaches the border, it shows in the
+silhouette at grazing angles rather than only as shading on the face. For pronounced
+board or brick depth try `strength: 0.09`.

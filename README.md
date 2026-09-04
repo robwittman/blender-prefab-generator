@@ -57,8 +57,10 @@ prefabgen build example/config/walls.yaml --no-thumbnails
 prefabgen build example/config/walls.yaml --filter '*_brick' --no-thumbnails
 ```
 
-`--filter` is a glob over prefab names or ids. Note a filtered build rewrites the
-manifest with only what it built, so run an unfiltered build before shipping.
+`--filter` is a glob over prefab names or ids. Builds are incremental, so the second
+command rebuilds the brick pieces and leaves the rest alone — and the manifest still
+describes the whole library, because the prefabs it skipped are recovered from the
+build cache rather than dropped.
 
 ### Showcase images
 
@@ -112,7 +114,8 @@ blob of fully-resolved specs and does only geometry, materials and rendering.
 ```
 prefabgen/
   matrix.py      cartesian expansion, exclude rules, name templating
-  config.py      config -> resolved specs; materials, pitches, relief
+  config.py      config -> resolved specs; includes, materials, pitches, relief
+  cache.py       what has to be rebuilt, and the report entries of what did not
   spec.py        WallSpec / RoofSpec / MaterialSpec, validation
   ids.py         regeneration-stable prefab ids
   textures.py    texture map discovery
@@ -156,6 +159,89 @@ coplanar faces against each other and z-fight into black bars. The L-shaped corn
 segment has no internal join to fight with. It anchors on its *outer corner*, so a 4m
 side becomes corner(1m) + wall(2m) + corner(1m).
 
+**Builds are incremental.** A prefab's output is a pure function of three things: its
+resolved spec, the bytes of every texture that spec names, and the Blender-side code
+that turns one into the other. All three are hashed into one key per prefab, so
+changing a single material rebuilds only the prefabs that use it:
+
+```
+$ prefabgen build example/config/walls.yaml       # after editing one material
+[prefabgen] building 34 of 68 prefab(s): 34 spec, textures or builder changed
+[prefabgen] reused 34 prefab(s) from the build cache
+```
+
+The key covers the whole spec, so it catches far more than materials — a changed wall
+width, a new pitch, a different output format, an edited `build.py`. Textures are
+compared by **content**, re-read only when size or mtime moves: a `git checkout` that
+restores a texture byte-for-byte does not trigger a rebuild, and a 4K set is not
+re-hashed every time. A prefab whose output file has been deleted is rebuilt whatever
+its key says. `--no-cache` forces a full rebuild.
+
+Thumbnail settings are deliberately *not* part of the key. Iterating with
+`--no-thumbnails` and then doing one full build is the documented workflow, and folding
+the thumbnail size in would make that last build a full rebuild of geometry that never
+changed — so a missing thumbnail is checked separately, and only when thumbnails are
+actually wanted.
+
+The cache stores each prefab's **build report entry**, not just its hash, and that is
+what makes a partial build safe. The manifest is composed from the whole plan, so
+entries for the prefabs a run did not touch have to come from somewhere; without them,
+editing one material would quietly drop the other 140 prefabs out of the catalogue —
+worse than the full rebuild it replaced. The cache lives at
+`build/.prefabgen-cache.json`; deleting it costs a rebuild and nothing else.
+
+Prefabs that a config change removed are reported, not deleted — their `.blend` files
+stay in `models/` until you clear them out.
+
+**Configs share with `include:`.** Pitches a gable and a roof must agree on, openings a
+wall cuts and a door fills — anything two builds have to keep identical goes in one file
+and every kit pulls it in:
+
+```yaml
+include: common.yaml          # or a list: [common.yaml, ../studio/house-style.yaml]
+
+output:
+  manifest: manifest-roofs.json   # this kit's own name; the rest of `output` is shared
+```
+
+Includes merge in the order listed and the including file wins over all of them, key by
+key: mappings merge, anything else — a list, a scalar — replaces outright. So a shared
+file may carry a whole `parts:` list, but a config declaring its own replaces it rather
+than appending, which keeps "what does this build actually contain" answerable from one
+place. Includes may nest; a cycle is an error.
+
+Paths inside an included file stay relative to *that file*, so a shared config can live
+in its own folder without every kit knowing where that folder is. The bundled example
+uses this: [example/config/common.yaml](example/config/common.yaml) holds the output
+settings, texture root, pitches, openings and defaults that walls, roofs and joinery
+all share.
+
+**Defaults are namespaced by part type.** `thickness` means 0.2 to a wall and 0.18 to a
+roof; `origin` means `bottom_center` to a wall and `footprint_center` to a roof. A flat
+`defaults:` block therefore *cannot* be shared between kits that build both — the two
+kits collide on the key rather than sharing it, and the loser is silent. Qualify the key
+with the part type it belongs to:
+
+```yaml
+defaults:
+  min_border: 0.1                 # unqualified: applies to every part
+  wall:   { thickness: 0.2,  origin: bottom_center }
+  roof:   { thickness: 0.18, origin: footprint_center }
+  door:   { wall_thickness: 0.2 }
+```
+
+Resolution runs part key → `defaults.<type>.<key>` → `defaults.<key>` → the built-in
+default, so unqualified keys stay the right home for genuinely cross-cutting settings
+and an existing flat block keeps working unchanged. The type names are the part types:
+`wall`, `roof`, `door`, `window`, `gable`, `corner`.
+
+Everything else the top level holds is already namespaced by construction —
+`materials:`, `pitches:` and `openings:` are maps keyed by a name you chose, so two
+includes only collide if they define *the same name*, and `output:`, `textures:` and
+`library:` are singular per build, where the including file overriding them is the
+point. `defaults:` was the one block whose keys meant different things to different
+readers.
+
 **Openings are a shared library.** `openings:` sits at the top level; walls *cut* them
 and joinery *fills* them from the same definition, so a door cannot silently stop
 fitting the hole it was built for. Same reasoning as named pitches.
@@ -191,24 +277,21 @@ because it costs vertices: a 2×2.5m wall goes from 8 to ~4,200.
 ## Tests
 
 ```bash
-python3 -m pytest tests -q      # 65 tests
+python3 -m pytest tests -q      # 126 tests
 ```
 
 Covers matrix expansion, exclude rules, stable ids, texture discovery across naming
-conventions, relief config, and manifest shape. Geometry is verified separately by
+conventions, relief config, config includes, scoped defaults, incremental-build
+invalidation, the plan/textures reporting commands, and manifest shape. Geometry is verified separately by
 building and measuring the meshes (manifold, volumes, mating-plane drift).
 
 ## Known gaps
 
 - **Relief does not apply to roof or joinery pieces yet** — it warns and leaves them flat.
   Walls, gables and corners all have it.
-- **`pitches:` is duplicated** between `walls.yaml` (for gables) and `roofs.yaml`. Each
-  config resolves independently, so there is nowhere shared to put it yet — an
-  `include:` directive would fix this properly and is the next thing to add.
 - **`.blend` cannot be loaded at runtime.** Godot's `.blend` import is an editor-only
   pipeline that shells out to Blender, so mods loaded at runtime need `.glb`
   (`format: [blend, glb]`). Verify what your loader accepts before shipping.
 - Windows are fixed glazing; an opening sash would reuse the door's hinge machinery.
-- **Builds are always full rebuilds**; there is no incremental caching.
 - Hip and valley trim caps overhang their footprint, so they do not bound to a grid cell
   the way slabs and corners do.

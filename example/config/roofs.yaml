@@ -1,19 +1,11 @@
-version: 1
+include: common.yaml
 
 library:
   name: Core Roof Kit
   version: "0.1.0"
 
 output:
-  dir: ../build
-  models_dir: models
-  thumbnails_dir: thumbnails
   manifest: manifest-roofs.json
-  format: blend
-  thumbnails: { enabled: true, size: 512, samples: 48 }
-
-textures:
-  root: ../textures
 
 materials:
   shingle_ceramic:
@@ -36,20 +28,11 @@ materials:
       height: reed_roof_04_disp_4k.jpg
 
 
-# Pitch is named, not typed inline, so every piece that has to meet another piece is
-# guaranteed to use the identical angle. 26.565 deg is atan(1/2): a 1m run rises
-# exactly 0.5m, so ridge heights land on the same grid the walls use. An "almost"
-# angle like 26 deg rises 0.9755m over 2m and puts every gable off-grid.
-roof:
-  pitches:
-    shallow: { rise: 1, run: 2 }   # 1:2 - exactly atan(0.5), 26.565051...deg
-    steep:   { rise: 1, run: 1 }   # 1:1 - 45deg
-    # `angle: 26.565` also works, but a rounded decimal makes a 2m run rise 0.999998m.
+# `pitches` comes from common.yaml - the same two entries the gables in walls.yaml use,
+# which is the whole point of naming them. `roof.pitches:` still works for a roof-only
+# angle no other piece has to meet.
 
-defaults:
-  thickness: 0.18       # roof slab thickness, measured perpendicular to the slope
-  origin: footprint_center
-  min_border: 0.1
+# `defaults.roof` in common.yaml carries the slab thickness and origin.
 
 parts:
   # Slabs tile a square plan grid: span runs along the eave, run is horizontal depth

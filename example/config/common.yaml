@@ -1,0 +1,65 @@
+# Shared by every kit in this folder. Anything a build can override it still can - the
+# including file wins, key by key - so this file carries only what the kits must agree
+# on, plus the output settings they had all been repeating.
+#
+# Pulled in with:
+#   include: common.yaml
+#
+# Paths here resolve relative to THIS file, so a shared config can live in its own
+# folder without every kit having to know where that folder is.
+version: 1
+
+output:
+  dir: ../build
+  models_dir: models
+  thumbnails_dir: thumbnails
+  format: blend            # blend | glb | fbx, or a list of them
+  pack_textures: false     # true embeds a copy of every texture in every prefab
+  thumbnails:
+    enabled: true
+    size: 512
+    samples: 48
+  # manifest: is deliberately absent - each kit names its own.
+
+textures:
+  root: ../textures        # map paths resolve against this
+
+# Named, not typed inline, so every piece that has to meet another piece is guaranteed
+# to use the identical angle: a gable in walls.yaml and the roof closing it in
+# roofs.yaml now read the same two lines rather than two copies that can drift.
+# 26.565 deg is atan(1/2) - a 1m run rises exactly 0.5m, so ridge heights land on the
+# same grid the walls use. An "almost" angle like 26 deg rises 0.9755m over 2m and puts
+# every gable off-grid, which is why these are ratios and not decimals.
+pitches:
+  shallow: { rise: 1, run: 2 }   # 1:2 - exactly atan(0.5), 26.565051...deg
+  steep:   { rise: 1, run: 1 }   # 1:1 - 45deg
+  # `angle: 26.565` also works, but a rounded decimal makes a 2m run rise 0.999998m.
+
+# Walls CUT these, doors and windows FILL them. One definition, so a door cannot
+# silently stop fitting the hole it was built for.
+openings:
+  door:   { width: 0.9, height: 2.1, sill: 0.0 }
+  window: { width: 1.2, height: 1.2, sill: 1.0 }
+
+# `thickness` means 0.2 to a wall and 0.18 to a roof, and `origin` means bottom_center
+# to a wall and footprint_center to a roof - one flat block cannot serve both kits, it
+# just collides on the key. Nesting under a part type qualifies it. Unqualified keys
+# still apply to every part, which is where genuinely cross-cutting settings belong.
+defaults:
+  min_border: 0.1          # solid material required around an opening, everywhere
+
+  wall:
+    thickness: 0.2
+    origin: bottom_center  # bottom_center | center | min_corner
+  gable:
+    thickness: 0.2
+    origin: bottom_center
+  corner:
+    thickness: 0.2
+  roof:
+    thickness: 0.18        # slab thickness, measured perpendicular to the slope
+    origin: footprint_center
+  door:
+    wall_thickness: 0.2    # linings are built to fill the reveal of this wall
+  window:
+    wall_thickness: 0.2

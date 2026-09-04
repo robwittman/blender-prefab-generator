@@ -16,6 +16,8 @@ from .spec import (MAP_ROLES, AnimationSpec, CornerSpec, FrameSpec, GableSpec,
 
 DEFAULT_MIN_BORDER = 0.1
 
+PART_TYPES = ("wall", "roof", "door", "window", "gable", "corner")
+
 
 @dataclass
 class Skipped:
@@ -44,14 +46,100 @@ class Plan:
     pack_textures: bool = False
     library: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
+    excluded: list = field(default_factory=list)   # dropped by --filter, not by the config
+
+
+INCLUDE_KEY = "include"
+
+# Values under these keys are paths written relative to the config file that declared
+# them. The resolver joins every path onto the ROOT config's directory, so anything an
+# include contributes has to be re-pointed at that directory or it lands in the wrong
+# place the moment a shared config lives in a folder of its own.
+_PATH_KEYS = (("output", "dir"), ("textures", "root"))
 
 
 def load(path: str) -> dict:
+    """Load a config file, resolving any ``include:`` it names.
+
+    Includes exist so pieces that must agree - pitches a gable and a roof share,
+    openings a wall cuts and a door fills - can be written once and pulled into every
+    build that needs them.
+
+    Includes merge in the order listed and the including file wins over all of them:
+    mappings merge key by key, anything else (a list, a scalar) replaces outright. So a
+    shared file can carry the whole ``parts:`` list, but a config that declares its own
+    replaces that list rather than appending to it. Includes may nest; a cycle is an
+    error.
+    """
+    path = os.path.abspath(path)
+    return _load(path, os.path.dirname(path), ())
+
+
+def _load(path: str, root_dir: str, stack: tuple) -> dict:
+    if path in stack:
+        chain = " -> ".join(os.path.basename(p) for p in stack + (path,))
+        raise ValueError(f"include cycle: {chain}")
+
+    cfg = _read(path)
+    here = os.path.dirname(path)
+    merged = {}
+    for rel in _include_list(cfg.pop(INCLUDE_KEY, None), path):
+        target = os.path.normpath(os.path.join(here, rel))
+        if not os.path.exists(target):
+            raise ValueError(f"{os.path.basename(path)} includes {rel!r}, which does "
+                             f"not exist (looked in {target})")
+        merged = _merge(merged, _load(target, root_dir, stack + (path,)))
+    return _merge(merged, _anchor(cfg, here, root_dir))
+
+
+def _read(path: str) -> dict:
     with open(path, "r") as fh:
         if path.endswith((".yaml", ".yml")):
             import yaml
-            return yaml.safe_load(fh)
-        return json.load(fh)
+            cfg = yaml.safe_load(fh)
+        else:
+            cfg = json.load(fh)
+    if cfg is None:
+        return {}
+    if not isinstance(cfg, dict):
+        raise ValueError(f"{path}: a config must be a mapping, got {type(cfg).__name__}")
+    return cfg
+
+
+def _include_list(raw, path: str) -> list:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+        return raw
+    raise ValueError(f"{path}: 'include' must be a path or a list of paths")
+
+
+def _merge(base: dict, over: dict) -> dict:
+    """Deep-merge mappings key by key; anything else replaces outright."""
+    out = dict(base)
+    for key, val in over.items():
+        if isinstance(val, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], val)
+        else:
+            out[key] = val
+    return out
+
+
+def _anchor(cfg: dict, here: str, root_dir: str) -> dict:
+    """Re-express an included file's paths so they still point where it meant."""
+    if os.path.normpath(here) == os.path.normpath(root_dir):
+        return cfg
+    for section, key in _PATH_KEYS:
+        block = cfg.get(section)
+        if not isinstance(block, dict):
+            continue
+        val = block.get(key)
+        if isinstance(val, str) and not os.path.isabs(val):
+            cfg[section] = dict(block)
+            cfg[section][key] = os.path.relpath(os.path.join(here, val), root_dir)
+    return cfg
 
 
 def resolve(cfg: dict, base_dir: str = ".") -> Plan:
@@ -68,8 +156,7 @@ def resolve(cfg: dict, base_dir: str = ".") -> Plan:
     tex_root = os.path.normpath(os.path.join(base_dir, (cfg.get("textures", {}) or {}).get("root", "textures")))
     materials, warnings = _materials(cfg.get("materials", {}) or {}, tex_root)
 
-    defaults = cfg.get("defaults", {}) or {}
-    min_border = float(defaults.get("min_border", DEFAULT_MIN_BORDER))
+    raw_defaults = cfg.get("defaults", {}) or {}
 
     specs, skipped, seen_ids, seen_names = [], [], {}, set()
 
@@ -83,9 +170,11 @@ def resolve(cfg: dict, base_dir: str = ".") -> Plan:
 
     for part in cfg.get("parts", []) or []:
         ptype = part.get("type", "wall")
-        if ptype not in ("wall", "roof", "door", "window", "gable", "corner"):
+        if ptype not in PART_TYPES:
             raise ValueError(f"unsupported part type {ptype!r} "
-                             "(known: wall, roof, door, window, gable, corner)")
+                             f"(known: {', '.join(PART_TYPES)})")
+        defaults = _defaults_for(raw_defaults, ptype)
+        min_border = float(defaults.get("min_border", DEFAULT_MIN_BORDER))
         source = part.get("source", defaults.get("source", "procedural"))
         if source != "procedural":
             raise ValueError(f"unsupported source {source!r} (only 'procedural' so far)")
@@ -151,6 +240,34 @@ def resolve(cfg: dict, base_dir: str = ".") -> Plan:
                 thumbnails=thumbs, manifest=out.get("manifest", "manifest.json"),
                 pack_textures=bool(out.get("pack_textures", False)),
                 library=cfg.get("library", {}) or {}, warnings=warnings)
+
+
+def _defaults_for(raw: dict, ptype: str) -> dict:
+    """The defaults block, flattened for one part type.
+
+    ``thickness`` means 0.2 to a wall and 0.18 to a roof; ``origin`` means
+    bottom_center to a wall and footprint_center to a roof. A single flat block cannot
+    carry both, so a shared config pulled into a walls kit AND a roofs kit collides on
+    the key rather than sharing it.
+
+    Nesting a block under a part type qualifies the key. Unqualified keys still apply
+    to every part - that is where genuinely cross-cutting settings like ``min_border``
+    belong - and the type block wins for parts of that type:
+
+        defaults:
+          min_border: 0.1                        # every part
+          wall: { thickness: 0.2 }               # walls only
+          roof: { thickness: 0.18 }              # roofs only
+    """
+    flat = {k: v for k, v in raw.items() if k not in PART_TYPES}
+    scoped = raw.get(ptype)
+    if scoped is None:
+        return flat
+    if not isinstance(scoped, dict):
+        raise ValueError(f"defaults.{ptype} must be a mapping of default values "
+                         f"for {ptype} parts, got {type(scoped).__name__}")
+    flat.update(scoped)
+    return flat
 
 
 def _openings(raw: dict) -> dict:

@@ -1,23 +1,13 @@
-version: 1
+# Output settings, the texture root, the named pitches and the opening library live in
+# common.yaml, shared with roofs.yaml and joinery.yaml. Anything below overrides it.
+include: common.yaml
 
 library:
   name: Core Wall Kit
   version: "0.1.0"
 
 output:
-  dir: ../build
-  models_dir: models
-  thumbnails_dir: thumbnails
   manifest: manifest.json
-  format: blend            # blend | glb | fbx, or a list of them
-  pack_textures: false     # true embeds a copy of every texture in every prefab
-  thumbnails:
-    enabled: true
-    size: 512
-    samples: 48
-
-textures:
-  root: ../textures        # map paths below resolve against this
 
 # Unzip a texture set into textures/<name>/ and it is picked up automatically: files
 # are matched to roles by their trailing token, so ambientCG / cc0-textures names
@@ -58,22 +48,12 @@ materials:
       strength: 0.09      # metres of displacement at full white
       resolution: 0.05    # metres per grid cell - drives both fidelity and vertex count
 
-# Gables must use the SAME angles as the roofs that sit on them. Keep these identical
-# to roofs.yaml - see the note in Known Gaps about hoisting them into a shared include.
-pitches:
-  shallow: { rise: 1, run: 2 }   # 1:2 - exactly atan(0.5)
-  steep:   { rise: 1, run: 1 }   # 1:1 - 45deg
+# `pitches` (shared with the roofs that sit on these gables) and `openings` (shared
+# with the doors and windows that fill them) both come from common.yaml.
 
-# Shared with the joinery config: walls CUT these, doors and windows FILL them. One
-# definition, so a door cannot silently stop fitting the hole it was built for.
-openings:
-  door:   { width: 0.9, height: 2.1, sill: 0.0 }
-  window: { width: 1.2, height: 1.2, sill: 1.0 }
-
-defaults:
-  origin: bottom_center    # bottom_center | center | min_corner
-  thickness: 0.2
-  min_border: 0.1          # solid material required around an opening
+# `defaults` comes from common.yaml, qualified per part type so one block can serve
+# this kit's walls, gables and corners as well as the roofs next door. A `defaults:`
+# here would merge over it, key by key.
 
 parts:
   - type: wall

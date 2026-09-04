@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import fnmatch
 import json
 import os
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 
+from . import cache as cache_mod
 from . import config as config_mod
 from . import manifest as manifest_mod
 from .spec import MAP_ROLES
@@ -42,8 +44,12 @@ def build_plan(args):
     cfg = config_mod.load(args.config)
     plan = config_mod.resolve(cfg, base_dir=os.path.dirname(os.path.abspath(args.config)) or ".")
     if args.filter:
-        plan.specs = [s for s in plan.specs if fnmatch.fnmatch(s.name, args.filter)
-                      or fnmatch.fnmatch(s.id, args.filter)]
+        keep = [s for s in plan.specs if fnmatch.fnmatch(s.name, args.filter)
+                or fnmatch.fnmatch(s.id, args.filter)]
+        # The rest are still part of the library; the manifest recovers them from the
+        # cache rather than dropping them, so a filtered build stays shippable.
+        plan.excluded = [s for s in plan.specs if s not in keep]
+        plan.specs = keep
     if getattr(args, "no_thumbnails", False):
         plan.thumbnails.enabled = False
     return plan
@@ -91,7 +97,7 @@ def cmd_textures(args) -> int:
         print(f"{name}  (tile_size {m.tile_size}m){flag}")
         if m.relief:
             print(f"  relief:   strength {m.relief.strength}m, resolution "
-                  f"{m.relief.resolution}m, feather {m.relief.feather}m "
+                  f"{m.relief.resolution}m, mid_level {m.relief.mid_level} "
                   f"(driven by the height map below)")
         print(f"  searched: {m.search_dir}")
         if not m.maps:
@@ -123,18 +129,9 @@ def cmd_plan(args) -> int:
     return 0
 
 
-def cmd_build(args) -> int:
-    plan = build_plan(args)
-    if not plan.specs:
-        print("nothing to build")
-        return 1
-    for s in plan.skipped:
-        print(f"skipped {s.name}: {s.reason}", file=sys.stderr)
-    for line in _texture_warnings(plan):
-        print(f"warning:{line}", file=sys.stderr)
-
+def _build_in_blender(args, plan, specs, out_dir):
+    """Run Blender over exactly these specs. Returns (exit code, report)."""
     blender = find_blender(args.blender)
-    out_dir = os.path.abspath(plan.out_dir)
     report_path = os.path.join(tempfile.gettempdir(), "prefabgen_report.json")
     job = {
         "models_dir": os.path.join(out_dir, plan.models_dir),
@@ -144,7 +141,7 @@ def cmd_build(args) -> int:
         "thumbnails": {"enabled": plan.thumbnails.enabled, "size": plan.thumbnails.size,
                        "samples": plan.thumbnails.samples},
         "report_path": report_path,
-        "specs": [s.to_dict() for s in plan.specs],
+        "specs": [s.to_dict() for s in specs],
     }
 
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
@@ -172,15 +169,70 @@ def cmd_build(args) -> int:
             print(proc.stdout or "", file=sys.stderr)
             print(proc.stderr or "", file=sys.stderr)
             print("re-run with --verbose for the full log", file=sys.stderr)
-        return 1
+        return 1, None
     with open(report_path) as fh:
         report = json.load(fh)
     os.unlink(report_path)
+    return 0, report
 
-    path = manifest_mod.write(manifest_mod.compose(plan, report),
+
+def cmd_build(args) -> int:
+    plan = build_plan(args)
+    if not plan.specs:
+        print("nothing to build")
+        return 1
+    for s in plan.skipped:
+        print(f"skipped {s.name}: {s.reason}", file=sys.stderr)
+    for line in _texture_warnings(plan):
+        print(f"warning:{line}", file=sys.stderr)
+
+    out_dir = os.path.abspath(plan.out_dir)
+    # --no-cache starts from an empty cache rather than skipping it, so the run still
+    # leaves the next build incremental.
+    cache = (cache_mod.Cache.empty(out_dir) if getattr(args, "no_cache", False)
+             else cache_mod.Cache.load(out_dir))
+    split = cache_mod.split(plan.specs, cache, plan.formats, plan.pack_textures,
+                            plan.thumbnails)
+
+    report = {"prefabs": []}
+    if split.todo:
+        print(f"[prefabgen] building {len(split.todo)} of {len(plan.specs)} prefab(s)"
+              f"{_reasons(split)}")
+        code, report = _build_in_blender(args, plan, split.todo, out_dir)
+        if code:
+            return code
+    else:
+        print(f"[prefabgen] up to date - {len(plan.specs)} prefab(s) reused")
+
+    for entry in report.get("prefabs", []):
+        cache.record(entry["id"], split.keys[entry["id"]], entry, plan.thumbnails)
+
+    # Everything the run did not touch - reused, or held back by --filter - is
+    # described from the cache, so the manifest still covers the whole library.
+    recovered = [s for s in plan.excluded if cache.entry(s.id)]
+    report = cache_mod.merged_report(report, cache, split.reused + recovered)
+
+    catalogue = dataclasses.replace(plan, specs=plan.specs + recovered)
+    path = manifest_mod.write(manifest_mod.compose(catalogue, report),
                               os.path.join(out_dir, plan.manifest))
+    cache.save()
+    if split.reused:
+        print(f"[prefabgen] reused {len(split.reused)} prefab(s) from the build cache")
+    if not plan.excluded:
+        orphans = cache.orphans([s.id for s in plan.specs])
+        if orphans:
+            print(f"[prefabgen] {len(orphans)} prefab(s) are no longer in the config; "
+                  f"their files are still in {plan.models_dir}/", file=sys.stderr)
     print(f"[prefabgen] manifest -> {path}")
     return 0
+
+
+def _reasons(split) -> str:
+    counts = {}
+    for reason in split.reasons.values():
+        counts[reason] = counts.get(reason, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ": " + ", ".join(f"{n} {reason}" for reason, n in ranked) if ranked else ""
 
 
 def cmd_showcase(args) -> int:
@@ -229,6 +281,7 @@ def cmd_showcase(args) -> int:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="prefabgen")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    parsers = {}
     for name, fn in (("plan", cmd_plan), ("build", cmd_build), ("textures", cmd_textures)):
         p = sub.add_parser(name)
         p.add_argument("config")
@@ -237,6 +290,9 @@ def main(argv=None) -> int:
         p.add_argument("--no-thumbnails", action="store_true", help="skip preview renders")
         p.add_argument("--verbose", action="store_true", help="stream Blender's full output")
         p.set_defaults(func=fn)
+        parsers[name] = p
+    parsers["build"].add_argument("--no-cache", action="store_true",
+                                  help="rebuild every prefab, ignoring the build cache")
     show = sub.add_parser("showcase")
     show.add_argument("configs", nargs="+", help="one or more config files to pool")
     show.add_argument("--out", help="directory for gallery.png / buildings.png")
